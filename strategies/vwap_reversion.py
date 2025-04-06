@@ -9,14 +9,21 @@ class VWAPReversionStrategy(StrategyBase):
     """
 
     def __init__(self, price_data: pd.DataFrame, threshold: float = 0.01):
+        """
+        Ініціалізація стратегії з вхідними даними.
+        """
         super().__init__(price_data)
         self.threshold = threshold
         self.vwap = None
+        self.entries_long = None
+        self.entries_short = None
+        self.exits = None
+        self.portfolio = None
 
     def generate_signals(self) -> pd.DataFrame:
         """
-        Signal generation: long entry when there is a significant drop
-        below VWAP, short entry when there is a rise above VWAP.
+        Генерація сигналів: довга позиція, коли ціна значно падає
+        нижче VWAP, коротка позиція, коли ціна піднімається вище VWAP.
         """
         close = self.price_data["close"]
         high = self.price_data["high"]
@@ -28,53 +35,49 @@ class VWAPReversionStrategy(StrategyBase):
 
         vwap_diff = (close - cum_vwap) / cum_vwap
 
-        entries_long = vwap_diff < -self.threshold
-        entries_short = vwap_diff > self.threshold
-        exits = vwap_diff.abs() < 0.001
+        self.entries_long = vwap_diff < -self.threshold
+        self.entries_short = vwap_diff > self.threshold
+        self.exits = vwap_diff.abs() < 0.001
 
-        self.signals = pd.DataFrame(
-            {"entry_long": entries_long,
-             "entry_short": entries_short,
-             "exit": exits}
+        return pd.DataFrame(
+            {
+                "entries_long": self.entries_long,
+                "entries_short": self.entries_short,
+                "exits": self.exits,
+            }
         )
-        return self.signals
 
-    def run_backtest(self) -> pd.DataFrame:
+    def run_backtest(self) -> vbt.Portfolio:
         """
-        Running a backtest via vectorbt.
+        Запуск бектесту через VectorBT.
         """
-        if self.signals is None:
+        if (
+            self.entries_long is None
+            or self.entries_short is None
+            or self.exits is None
+        ):
             self.generate_signals()
-        close = self.price_data["close"]
-        entries = self.signals["entry_long"]
-        short_entries = self.signals["entry_short"]
-        exits = self.signals["exit"]
-        pf = vbt.Portfolio.from_signals(
-            close,
-            entries=entries,
-            short_entries=short_entries,
-            exits=exits,
-            short_exits=exits,
-            fees=0.001,
-            slippage=0.001,
-        )
 
-        self.results = pf
-        return pf.stats()
+        close = self.price_data["close"]
+        self.portfolio = vbt.Portfolio.from_signals(
+            close,
+            entries=self.entries_long,
+            short_entries=self.entries_short,
+            exits=self.exits,
+            short_exits=self.exits,
+            slippage=0.001,
+            fees=0.001,
+            freq="1min",  # <-- Set the frequency here (adjust accordingly)
+        )
+        return self.portfolio
 
     def get_metrics(self) -> dict:
         """
-        Obtaining key backtest metrics.
+        Отримання ключових метрик бектесту.
         """
-        if self.results is None:
+        if self.portfolio is None:
             self.run_backtest()
-        stats = self.results.stats()
-        metrics = {
-            "Total Return": stats["Total Return [%]"],
-            "Sharpe Ratio": stats["Sharpe Ratio"],
-            "Max Drawdown": stats["Max Drawdown [%]"],
-            "Win Rate": stats["Win Rate [%]"],
-            "Expectancy": stats["Expectancy"],
-            "Exposure Time": stats["Exposure Time [%]"],
-        }
-        return metrics
+
+        from core.metrics import calculate_metrics
+
+        return calculate_metrics(self.portfolio)

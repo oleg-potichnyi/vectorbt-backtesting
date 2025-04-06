@@ -15,51 +15,49 @@ class SMACrossover(StrategyBase):
         super().__init__(price_data)
         self.short_window = short_window
         self.long_window = long_window
+        self.entries = None
+        self.exits = None
+        self.portfolio = None
 
     def generate_signals(self) -> pd.DataFrame:
         """
-        Generates trading signals for the SMA Crossover strategy.
-        Buy when short SMA is above long SMA,
-        and sell when short SMA is below long SMA.
+        Generate buy/sell signals.
         """
-        short_sma = self.price_data["close"].rolling(window=self.short_window).mean()
-        long_sma = self.price_data["close"].rolling(window=self.long_window).mean()
+        close = self.price_data['close']
+        short_sma = close.rolling(window=self.short_window).mean()
+        long_sma = close.rolling(window=self.long_window).mean()
 
-        buy_signal = short_sma > long_sma
-        sell_signal = short_sma < long_sma
+        self.entries = (short_sma > long_sma).fillna(False)
+        self.exits = (short_sma < long_sma).fillna(False)
 
-        signals = pd.DataFrame(0, index=self.price_data.index, columns=["signal"])
-        signals.loc[buy_signal, "signal"] = 1
-        signals.loc[sell_signal, "signal"] = -1
+        return pd.DataFrame({'entries': self.entries, 'exits': self.exits})
 
-        return signals
-
-    def run_backtest(self) -> pd.DataFrame:
+    def run_backtest(self) -> vbt.Portfolio:
         """
-        Performs a backtest on the SMA Crossover strategy.
-        Returns a DataFrame with the backtest results.
+        Run backtest using VectorBT.
         """
-        signals = self.generate_signals()
 
-        portfolio = vbt.Portfolio.from_signals(
-            self.price_data["close"],
-            entries=signals["signal"] == 1,
-            exits=signals["signal"] == -1,
-            freq="1T",
+        if self.entries is None or self.exits is None:
+            self.generate_signals()
+
+        close = self.price_data['close']
+        self.portfolio = vbt.Portfolio.from_signals(
+            close=close,
+            entries=self.entries,
+            exits=self.exits,
+            freq="1min",
             slippage=0.001,
             fees=0.001,
         )
-        return portfolio.stats()
+        return self.portfolio
 
     def get_metrics(self) -> dict:
         """
-        Calculates key strategy metrics.
+        Return calculated metrics using core.metrics.
         """
-        portfolio_stats = self.run_backtest()
-        metrics = {
-            "total_return": portfolio_stats["total_return"],
-            "sharpe_ratio": portfolio_stats["sharpe_ratio"],
-            "max_drawdown": portfolio_stats["max_drawdown"],
-            "winrate": portfolio_stats["winrate"],
-        }
-        return metrics
+        if self.portfolio is None:
+            self.run_backtest()
+
+        from core.metrics import calculate_metrics
+        return calculate_metrics(self.portfolio)
+
